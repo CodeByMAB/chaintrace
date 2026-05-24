@@ -1,13 +1,15 @@
 """SQLite storage backend."""
 
+import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 
 from chaintrace.storage.base import BaseStorageBackend
-from chaintrace.types.trace import Trace, QueryFilters, TraceStats
+from chaintrace.types.trace import QueryFilters, ReasoningStep, Trace, TraceStats
 
 
 class SqliteBackend(BaseStorageBackend):
@@ -33,34 +35,47 @@ class SqliteBackend(BaseStorageBackend):
                 response TEXT NOT NULL,
                 reasoning_chain TEXT NOT NULL,
                 metadata TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                timestamp_proof TEXT,
+                timestamped INTEGER NOT NULL DEFAULT 0
             )
         """)
 
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_adapter ON traces(adapter)
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_model ON traces(model)
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_created_at ON traces(created_at)
-        """)
+        # Migrate existing databases that predate these columns
+        for col, definition in [
+            ("timestamp_proof", "TEXT"),
+            ("timestamped", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                await self._db.execute(f"ALTER TABLE traces ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # Column already exists
+
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_adapter ON traces(adapter)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model ON traces(model)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_created_at ON traces(created_at)"
+        )
 
         await self._db.commit()
 
     async def store(self, trace: Trace) -> None:
         """Store a trace in SQLite."""
-        import json
-
         if not self._db:
             raise RuntimeError("Database not initialized")
 
         trace_id = trace.id or str(uuid.uuid4())
+        trace.id = trace_id
+
         await self._db.execute(
             """INSERT OR REPLACE INTO traces
-               (id, adapter, model, request, response, reasoning_chain, metadata, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, adapter, model, request, response, reasoning_chain, metadata,
+                created_at, timestamp_proof, timestamped)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 trace_id,
                 trace.adapter,
@@ -70,6 +85,8 @@ class SqliteBackend(BaseStorageBackend):
                 json.dumps([s.model_dump() for s in trace.reasoning_chain]),
                 json.dumps(trace.metadata),
                 trace.created_at.isoformat(),
+                json.dumps(trace.timestamp_proof) if trace.timestamp_proof else None,
+                1 if trace.timestamped else 0,
             ),
         )
         await self._db.commit()
@@ -81,8 +98,6 @@ class SqliteBackend(BaseStorageBackend):
 
     async def get(self, trace_id: str) -> Trace | None:
         """Get a trace by ID."""
-        import json
-
         if not self._db:
             raise RuntimeError("Database not initialized")
 
@@ -92,41 +107,38 @@ class SqliteBackend(BaseStorageBackend):
             row = await cursor.fetchone()
             if not row:
                 return None
-
             return self._row_to_trace(row)
 
     async def query(
         self, filters: QueryFilters, limit: int = 100, offset: int = 0
     ) -> list[Trace]:
         """Query traces with filters."""
-        import json
-
         if not self._db:
             raise RuntimeError("Database not initialized")
 
-        query = "SELECT * FROM traces WHERE 1=1"
-        params = []
+        q = "SELECT * FROM traces WHERE 1=1"
+        params: list[Any] = []
 
         if filters.adapter:
-            query += " AND adapter = ?"
+            q += " AND adapter = ?"
             params.append(filters.adapter)
 
         if filters.model:
-            query += " AND model = ?"
+            q += " AND model = ?"
             params.append(filters.model)
 
         if filters.start_date:
-            query += " AND created_at >= ?"
+            q += " AND created_at >= ?"
             params.append(filters.start_date.isoformat())
 
         if filters.end_date:
-            query += " AND created_at <= ?"
+            q += " AND created_at <= ?"
             params.append(filters.end_date.isoformat())
 
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
-        async with self._db.execute(query, params) as cursor:
+        async with self._db.execute(q, params) as cursor:
             rows = await cursor.fetchall()
             return [self._row_to_trace(row) for row in rows]
 
@@ -146,9 +158,7 @@ class SqliteBackend(BaseStorageBackend):
         if not self._db:
             raise RuntimeError("Database not initialized")
 
-        async with self._db.execute(
-            "SELECT COUNT(*) FROM traces"
-        ) as cursor:
+        async with self._db.execute("SELECT COUNT(*) FROM traces") as cursor:
             total_traces = (await cursor.fetchone())[0]
 
         async with self._db.execute(
@@ -179,10 +189,6 @@ class SqliteBackend(BaseStorageBackend):
 
     def _row_to_trace(self, row: tuple) -> Trace:
         """Convert a database row to a Trace."""
-        import json
-        from chaintrace.types.trace import ReasoningStep
-        from datetime import datetime
-
         reasoning_chain = json.loads(row[5])
         reasoning_steps = [
             ReasoningStep(
@@ -193,6 +199,9 @@ class SqliteBackend(BaseStorageBackend):
             for s in reasoning_chain
         ]
 
+        timestamp_proof = json.loads(row[8]) if len(row) > 8 and row[8] else None
+        timestamped = bool(row[9]) if len(row) > 9 else False
+
         return Trace(
             id=row[0],
             adapter=row[1],
@@ -202,4 +211,6 @@ class SqliteBackend(BaseStorageBackend):
             reasoning_chain=reasoning_steps,
             metadata=json.loads(row[6]),
             created_at=datetime.fromisoformat(row[7]),
+            timestamp_proof=timestamp_proof,
+            timestamped=timestamped,
         )

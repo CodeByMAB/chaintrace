@@ -10,6 +10,9 @@ from chaintrace.cli.commands import (
     list_traces,
     analyze,
     stats,
+    visualize,
+    export,
+    diff,
     timestamp,
     timestamp_all,
     verify,
@@ -35,6 +38,9 @@ app.add_command(capture)
 app.add_command(list_traces)
 app.add_command(analyze)
 app.add_command(stats)
+app.add_command(visualize)
+app.add_command(export)
+app.add_command(diff)
 
 # Bitcoin timestamping commands
 app.add_command(timestamp)
