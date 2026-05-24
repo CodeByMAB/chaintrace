@@ -82,7 +82,7 @@ class SqliteBackend(BaseStorageBackend):
                 trace.model,
                 json.dumps(trace.request),
                 json.dumps(trace.response),
-                json.dumps([s.model_dump() for s in trace.reasoning_chain]),
+                json.dumps([s.model_dump(mode="json") for s in trace.reasoning_chain]),
                 json.dumps(trace.metadata),
                 trace.created_at.isoformat(),
                 json.dumps(trace.timestamp_proof) if trace.timestamp_proof else None,

@@ -18,9 +18,10 @@ from chaintrace.types.trace import ReasoningStep
 # Tags that typically contain reasoning content, in priority order
 _REASONING_TAGS = ["thinking", "reasoning", "thought", "scratchpad", "analysis", "step"]
 
-# Compiled pattern: matches <tag>...</tag> (non-greedy, DOTALL)
+# Compiled pattern: matches <tag>...</tag>.
+# Uses a negative lookahead to avoid crossing into nested/subsequent closing tags.
 _TAG_RE = re.compile(
-    r"<({tags})(\s[^>]*)?>(.+?)</\1>".format(tags="|".join(_REASONING_TAGS)),
+    r"<({tags})(\s[^>]*)?>((?:(?!</\1>).)+)</\1>".format(tags="|".join(_REASONING_TAGS)),
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -36,7 +37,7 @@ class XmlExtractor(BaseExtractor):
     def extract(self, text: str) -> list[ReasoningStep]:
         steps = []
         for i, match in enumerate(_TAG_RE.finditer(text), start=1):
-            content = match.group(3).strip()
+            content = match.group(3).strip()  # group 3 = content (after tag name + attrs)
             if content:
                 steps.append(
                     ReasoningStep(step=i, content=content, timestamp=datetime.utcnow())
