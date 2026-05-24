@@ -1,0 +1,110 @@
+"""Main ChainTrace engine - orchestration of all components."""
+
+from typing import Any
+
+from chaintrace.core.config import ChainTraceConfig
+from chaintrace.core.events import EventBus
+from chaintrace.core.exceptions import StorageError, AdapterError
+from chaintrace.storage.registry import StorageBackendRegistry
+from chaintrace.adapters.registry import AdapterRegistry
+from chaintrace.analysis.pipeline import AnalysisPipeline
+from chaintrace.types.trace import Trace, QueryFilters, TraceStats
+
+
+class ChainTraceEngine:
+    """Main orchestration engine for ChainTrace.
+
+    Coordinates capture, storage, and analysis of reasoning traces.
+    """
+
+    def __init__(self, config: ChainTraceConfig) -> None:
+        self.config = config
+        self.event_bus = EventBus()
+        self.storage_registry = StorageBackendRegistry()
+        self.adapter_registry = AdapterRegistry()
+        self.analyzer_pipeline = AnalysisPipeline()
+
+        self._storage = None
+        self._adapters: dict[str, Any] = {}
+
+    async def initialize(self) -> None:
+        """Initialize the engine and its components."""
+        # Initialize storage backend
+        storage_config = self.config.storage.model_dump(
+            exclude_none=True, exclude={"backend"}
+        )
+        backend_name = self.config.storage.backend
+        self._storage = self.storage_registry.get(backend_name, storage_config)
+        await self._storage.initialize(
+            storage_config.get(backend_name, {}) or {}
+        )
+
+        # Initialize adapters
+        self.adapter_registry.discover_builtins()
+        for adapter_name, adapter_config in self.config.adapters.items():
+            self._adapters[adapter_name] = self.adapter_registry.get(
+                adapter_name, adapter_config
+            )
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        if self._storage:
+            await self._storage.close()
+
+    async def capture(
+        self,
+        adapter_name: str,
+        request: dict[str, Any],
+        response: dict[str, Any],
+    ) -> Trace:
+        """Capture a request/response pair as a trace."""
+        adapter = self._adapters.get(adapter_name)
+        if not adapter:
+            raise AdapterError(f"Adapter not found: {adapter_name}")
+
+        # Extract reasoning from response
+        reasoning_steps = adapter.extract_reasoning(response)
+
+        # Create trace
+        trace = Trace(
+            adapter=adapter_name,
+            model=request.get("model", "unknown"),
+            request=request,
+            response=response,
+            reasoning_chain=reasoning_steps,
+            metadata={
+                "captured_at": "now",  # TODO: use actual timestamp
+            },
+        )
+
+        # Store trace
+        await self._storage.store(trace)
+
+        return trace
+
+    async def get_trace(self, trace_id: str) -> Trace | None:
+        """Get a trace by ID."""
+        return await self._storage.get(trace_id)
+
+    async def query_traces(
+        self,
+        filters: QueryFilters | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Trace]:
+        """Query traces with optional filters."""
+        return await self._storage.query(filters or QueryFilters(), limit, offset)
+
+    async def delete_trace(self, trace_id: str) -> bool:
+        """Delete a trace by ID."""
+        return await self._storage.delete(trace_id)
+
+    async def analyze_trace(
+        self, trace: Trace, analyzers: list[str] | None = None
+    ) -> list[Any]:
+        """Run analysis on a trace."""
+        return await self.analyzer_pipeline.run(trace, analyzers)
+
+    async def get_stats(self) -> TraceStats:
+        """Get storage statistics."""
+        return await self._storage.stats()
