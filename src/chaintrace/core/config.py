@@ -71,6 +71,19 @@ class AnalysisConfig(BaseModel):
     analyzers: list[str] = Field(default_factory=lambda: ["token_count", "step_count", "latency"])
 
 
+class AttestationConfig(BaseModel):
+    """Configuration for Bitcoin timestamping (Open Timestamps)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Bitcoin timestamping via Open Timestamps",
+    )
+    default_calendar: str | None = Field(
+        default=None,
+        description="Default Open Timestamps calendar server URL",
+    )
+
+
 class ChainTraceConfig(BaseModel):
     """Main configuration for ChainTrace."""
 
@@ -78,6 +91,7 @@ class ChainTraceConfig(BaseModel):
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
+    attestation: AttestationConfig = Field(default_factory=AttestationConfig)
     adapters: dict[str, dict] = Field(default_factory=dict)
 
     class Config:

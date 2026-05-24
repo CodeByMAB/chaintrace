@@ -111,6 +111,17 @@ class ChainTraceEngine:
 
     # === Bitcoin Timestamping (Open Timestamps) ===
 
+    def _check_attestation_enabled(self) -> None:
+        """Check if attestation is enabled, raise if not."""
+        if not self.config.attestation.enabled:
+            from chaintrace.core.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "Bitcoin timestamping is not enabled. "
+                "Set attestation.enabled=true in config or CHAINTRACE_ATTESTATION_ENABLED=true "
+                "to enable Open Timestamps."
+            )
+
     async def timestamp_trace(
         self,
         trace: Trace,
@@ -125,11 +136,17 @@ class ChainTraceEngine:
         Returns:
             The trace with timestamp proof attached
         """
+        from chaintrace.core.exceptions import ConfigurationError
         from chaintrace.attestation import OpenTimestampsClient
+
+        self._check_attestation_enabled()
+
+        # Use config calendar if not specified
+        calendar = calendar_url or self.config.attestation.default_calendar
 
         ots = OpenTimestampsClient()
         try:
-            proof = await ots.timestamp_trace(trace, calendar_url)
+            proof = await ots.timestamp_trace(trace, calendar)
 
             # Update trace with timestamp proof
             trace.timestamp_proof = proof.to_dict()
@@ -159,6 +176,11 @@ class ChainTraceEngine:
         from chaintrace.attestation import OpenTimestampsClient
         from chaintrace.types.trace import Trace
 
+        self._check_attestation_enabled()
+
+        # Use config calendar if not specified
+        calendar = calendar_url or self.config.attestation.default_calendar
+
         traces = await self.query_traces(filters, limit=10000)
 
         # Filter to untimestamped
@@ -173,7 +195,7 @@ class ChainTraceEngine:
         try:
             for trace in untimestamped:
                 try:
-                    proof = await ots.timestamp_trace(trace, calendar_url)
+                    proof = await ots.timestamp_trace(trace, calendar)
                     trace.timestamp_proof = proof.to_dict()
                     trace.timestamped = True
                     await self._storage.store(trace)

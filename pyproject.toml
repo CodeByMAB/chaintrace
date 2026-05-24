@@ -66,6 +66,10 @@ analysis = [
     "numpy>=1.26",
     "scipy>=1.11",
 ]
+bitcoin = [
+    # httpx already included - for future Bitcoin-related features
+    # Open Timestamps works with core dependencies
+]
 
 [project.scripts]
 chaintrace = "chaintrace.cli.app:main"
