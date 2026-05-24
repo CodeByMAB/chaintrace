@@ -10,6 +10,10 @@ from chaintrace.cli.commands import (
     list_traces,
     analyze,
     stats,
+    timestamp,
+    timestamp_all,
+    verify,
+    audit,
 )
 
 console = Console()
@@ -31,6 +35,12 @@ app.add_command(capture)
 app.add_command(list_traces)
 app.add_command(analyze)
 app.add_command(stats)
+
+# Bitcoin timestamping commands
+app.add_command(timestamp)
+app.add_command(timestamp_all)
+app.add_command(verify)
+app.add_command(audit)
 
 
 def main():

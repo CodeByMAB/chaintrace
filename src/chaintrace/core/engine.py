@@ -108,3 +108,159 @@ class ChainTraceEngine:
     async def get_stats(self) -> TraceStats:
         """Get storage statistics."""
         return await self._storage.stats()
+
+    # === Bitcoin Timestamping (Open Timestamps) ===
+
+    async def timestamp_trace(
+        self,
+        trace: Trace,
+        calendar_url: str | None = None,
+    ) -> Trace:
+        """Timestamp a trace on Bitcoin via Open Timestamps.
+
+        Args:
+            trace: The trace to timestamp
+            calendar_url: Optional specific calendar server
+
+        Returns:
+            The trace with timestamp proof attached
+        """
+        from chaintrace.attestation import OpenTimestampsClient
+
+        ots = OpenTimestampsClient()
+        try:
+            proof = await ots.timestamp_trace(trace, calendar_url)
+
+            # Update trace with timestamp proof
+            trace.timestamp_proof = proof.to_dict()
+            trace.timestamped = True
+
+            # Store updated trace
+            await self._storage.store(trace)
+
+            return trace
+        finally:
+            await ots.close()
+
+    async def timestamp_all(
+        self,
+        filters: QueryFilters | None = None,
+        calendar_url: str | None = None,
+    ) -> list[Trace]:
+        """Timestamp all untimestamped traces.
+
+        Args:
+            filters: Optional filters to select traces
+            calendar_url: Optional specific calendar server
+
+        Returns:
+            List of timestamped traces
+        """
+        from chaintrace.attestation import OpenTimestampsClient
+        from chaintrace.types.trace import Trace
+
+        traces = await self.query_traces(filters, limit=10000)
+
+        # Filter to untimestamped
+        untimestamped = [t for t in traces if not t.timestamped]
+
+        if not untimestamped:
+            return []
+
+        ots = OpenTimestampsClient()
+        timestamped = []
+
+        try:
+            for trace in untimestamped:
+                try:
+                    proof = await ots.timestamp_trace(trace, calendar_url)
+                    trace.timestamp_proof = proof.to_dict()
+                    trace.timestamped = True
+                    await self._storage.store(trace)
+                    timestamped.append(trace)
+                except Exception as e:
+                    # Log but continue
+                    import logging
+
+                    logging.warning(f"Failed to timestamp trace {trace.id}: {e}")
+
+            return timestamped
+        finally:
+            await ots.close()
+
+    async def verify_trace_timestamp(self, trace: Trace) -> dict[str, Any]:
+        """Verify a trace's timestamp proof.
+
+        Args:
+            trace: The trace to verify
+
+        Returns:
+            Verification result dictionary
+        """
+        from chaintrace.attestation import AuditVerifier
+        from chaintrace.attestation.opentimestamps import TimestampProof
+
+        if not trace.timestamp_proof:
+            return {
+                "verified": False,
+                "message": "No timestamp proof available",
+            }
+
+        proof = TimestampProof.from_dict(trace.timestamp_proof)
+        verifier = AuditVerifier()
+
+        try:
+            result = await verifier.verify_trace(trace, proof)
+            return {
+                "verified": result.status.value == "verified",
+                "status": result.status.value,
+                "message": result.message,
+                "details": result.details,
+            }
+        finally:
+            await verifier.close()
+
+    async def audit_traces_before_block(
+        self,
+        block_height: int,
+        filters: QueryFilters | None = None,
+    ) -> list[dict[str, Any]]:
+        """Audit traces that were timestamped before a specific block.
+
+        This answers: "Show me all traces that existed before block X"
+
+        Args:
+            block_height: The Bitcoin block height to check
+            filters: Optional filters for traces
+
+        Returns:
+            List of audit results
+        """
+        from chaintrace.attestation import AuditVerifier
+        from chaintrace.attestation.opentimestamps import TimestampProof
+
+        traces = await self.query_traces(filters, limit=10000)
+
+        # Build proof dict
+        proofs: dict[str, TimestampProof] = {}
+        for trace in traces:
+            if trace.id and trace.timestamp_proof:
+                proofs[trace.id] = TimestampProof.from_dict(trace.timestamp_proof)
+
+        verifier = AuditVerifier()
+        results = []
+
+        try:
+            verifications = await verifier.verify_before_block(traces, proofs, block_height)
+
+            for v in verifications:
+                results.append({
+                    "trace_id": v.trace_id,
+                    "status": v.status.value,
+                    "message": v.message,
+                    "details": v.details,
+                })
+
+            return results
+        finally:
+            await verifier.close()

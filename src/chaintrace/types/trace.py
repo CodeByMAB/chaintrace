@@ -32,6 +32,16 @@ class Trace(BaseModel):
         default_factory=datetime.utcnow, description="Creation timestamp"
     )
 
+    # Bitcoin timestamp proof (via Open Timestamps)
+    timestamp_proof: dict[str, Any] | None = Field(
+        default=None,
+        description="Open Timestamps proof for Bitcoin timestamping",
+    )
+    timestamped: bool = Field(
+        default=False,
+        description="Whether this trace has been timestamped on Bitcoin",
+    )
+
 
 class QueryFilters(BaseModel):
     """Filters for querying traces."""

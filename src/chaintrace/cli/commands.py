@@ -180,3 +180,178 @@ def stats():
             await engine.close()
 
     asyncio.run(do_stats())
+
+
+# === Bitcoin Timestamping Commands ===
+
+@click.command()
+@click.argument("trace_id")
+@click.option("--calendar", help="Open Timestamps calendar URL")
+def timestamp(trace_id: str, calendar: str | None):
+    """Timestamp a trace on Bitcoin via Open Timestamps.
+
+    TRACE_ID: The ID of the trace to timestamp
+    """
+    async def do_timestamp():
+        config = ChainTraceConfig()
+        engine = ChainTraceEngine(config)
+        await engine.initialize()
+
+        try:
+            trace = await engine.get_trace(trace_id)
+            if not trace:
+                console.print(f"[red]Trace not found: {trace_id}[/red]")
+                return
+
+            if trace.timestamped:
+                console.print(f"[yellow]Trace already timestamped[/yellow]")
+                console.print(f"  Block: {trace.timestamp_proof.get('bitcoin_block_height')}")
+                console.print(f"  Hash: {trace.timestamp_proof.get('hash', 'N/A')[:16]}...")
+                return
+
+            console.print(f"[cyan]Timestamping trace {trace_id} on Bitcoin...[/cyan]")
+
+            timestamped = await engine.timestamp_trace(trace, calendar)
+
+            console.print(f"[green]✓ Trace timestamped successfully![/green]")
+            console.print(f"  Hash: {timestamped.timestamp_proof['hash'][:16]}...")
+            console.print(f"  Calendar: {timestamped.timestamp_proof['calendar_url']}")
+            console.print(f"  Status: {timestamped.timestamp_proof['status']}")
+            console.print("\n[dim]Timestamp will be confirmed in Bitcoin in ~10 minutes[/dim]")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(do_timestamp())
+
+
+@click.command()
+@click.option("--calendar", help="Open Timestamps calendar URL")
+@click.option("--adapter", help="Filter by adapter")
+@click.option("--model", help="Filter by model")
+def timestamp_all(calendar: str | None, adapter: str | None, model: str | None):
+    """Timestamp all untimestamped traces on Bitcoin."""
+    from chaintrace.types.trace import QueryFilters
+
+    async def do_timestamp_all():
+        config = ChainTraceConfig()
+        engine = ChainTraceEngine(config)
+        await engine.initialize()
+
+        try:
+            filters = QueryFilters(adapter=adapter, model=model)
+            traces = await engine.timestamp_all(filters, calendar)
+
+            if not traces:
+                console.print("[yellow]No untimestamped traces found[/yellow]")
+                return
+
+            console.print(f"[green]✓ Timestamped {len(traces)} traces on Bitcoin[/green]")
+            for trace in traces:
+                console.print(f"  {trace.id[:8]}... - {trace.timestamp_proof['hash'][:16]}...")
+
+            console.print("\n[dim]Timestamps will be confirmed in Bitcoin in ~10 minutes[/dim]")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(do_timestamp_all())
+
+
+@click.command()
+@click.argument("trace_id")
+def verify(trace_id: str):
+    """Verify a trace's Bitcoin timestamp proof.
+
+    TRACE_ID: The ID of the trace to verify
+    """
+    async def do_verify():
+        config = ChainTraceConfig()
+        engine = ChainTraceEngine(config)
+        await engine.initialize()
+
+        try:
+            trace = await engine.get_trace(trace_id)
+            if not trace:
+                console.print(f"[red]Trace not found: {trace_id}[/red]")
+                return
+
+            if not trace.timestamped:
+                console.print(f"[yellow]Trace not timestamped[/yellow]")
+                return
+
+            console.print(f"[cyan]Verifying timestamp for {trace_id}...[/cyan]")
+
+            result = await engine.verify_trace_timestamp(trace)
+
+            if result["verified"]:
+                console.print(f"[green]✓ Timestamp verified![/green]")
+            else:
+                console.print(f"[red]✗ Verification failed[/red]")
+
+            console.print(f"  Status: {result['status']}")
+            console.print(f"  Message: {result['message']}")
+
+            if result.get("details"):
+                console.print("\n[bold]Details:[/bold]")
+                for key, value in result["details"].items():
+                    console.print(f"  {key}: {value}")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(do_verify())
+
+
+@click.command()
+@click.argument("block_height", type=int)
+@click.option("--adapter", help="Filter by adapter")
+@click.option("--model", help="Filter by model")
+def audit(block_height: int, adapter: str | None, model: str | None):
+    """Audit traces timestamped before a Bitcoin block.
+
+    This answers: "Show me all traces that existed before block X"
+
+    BLOCK_HEIGHT: The Bitcoin block height to check
+    """
+    from chaintrace.types.trace import QueryFilters
+
+    async def do_audit():
+        config = ChainTraceConfig()
+        engine = ChainTraceEngine(config)
+        await engine.initialize()
+
+        try:
+            filters = QueryFilters(adapter=adapter, model=model)
+
+            console.print(f"[cyan]Auditing traces timestamped before block {block_height}...[/cyan]")
+
+            results = await engine.audit_traces_before_block(block_height, filters)
+
+            if not results:
+                console.print("[yellow]No timestamped traces found[/yellow]")
+                return
+
+            table = Table(title=f"Audit Results (before block {block_height})")
+            table.add_column("Trace ID", style="cyan")
+            table.add_column("Status")
+            table.add_column("Message")
+
+            verified_count = 0
+            for r in results:
+                status_style = "green" if r["status"] == "verified" else "red"
+                table.add_row(
+                    r["trace_id"][:8] + "...",
+                    f"[{status_style}]{r['status']}[/{status_style}]",
+                    r["message"],
+                )
+                if r["status"] == "verified":
+                    verified_count += 1
+
+            console.print(table)
+            console.print(f"\n[green]{verified_count}/{len(results)} traces verified[/green]")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(do_audit())
